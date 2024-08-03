@@ -19,7 +19,6 @@ target/
 *.iws
 *.iml
 *.ipr
-../postman-json-to-document.iml
 
 ### NetBeans ###
 /nbproject/private/
