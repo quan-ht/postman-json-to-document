@@ -14,12 +14,12 @@ target/
 .sts4-cache
 
 ### IntelliJ IDEA ###
-idea/
+../.idea
 .idea
 *.iws
 *.iml
 *.ipr
-../*.iml
+../postman-json-to-document.iml
 
 ### NetBeans ###
 /nbproject/private/
