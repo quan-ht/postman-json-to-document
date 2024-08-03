@@ -12,6 +12,7 @@ import com.tao.handler.MergeStrategyHandler;
 import com.tao.vo.Document;
 import com.tao.vo.Header;
 import com.tao.vo.Parameter;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.ByteArrayInputStream;
@@ -54,7 +55,7 @@ public class App {
 
 	private static void fillExcel(List<Document> documents, String outFilePath) throws IOException {
 		String templateFileName = Objects.requireNonNull(App.class.getClassLoader().getResource("template.xlsx")).getPath();
-		byte[] templateBytes = createSheetFromTemplate(templateFileName, documents.size());
+		byte[] templateBytes = createSheetFromTemplate(templateFileName, documents);
 		try (ExcelWriter excelWriter = EasyExcel.write(outFilePath).withTemplate(new ByteArrayInputStream(templateBytes)).build()) {
 			for (int i = 0; i < documents.size(); i++) {
 				Document document = documents.get(i);
@@ -66,12 +67,13 @@ public class App {
 				excelWriter.fill(document, writeSheet);
 				excelWriter.fill(new FillWrapper("header", document.getHeaders()), fillConfig, writeSheet);
 				excelWriter.fill(new FillWrapper("requestParameters", document.getRequestParameters()), fillConfig, writeSheet);
+				excelWriter.fill(new FillWrapper("responseParameters", document.getResponseParameters()), fillConfig, writeSheet);
 			}
 		}
 
 	}
 
-	private static byte[] createSheetFromTemplate(String templateFileName, int size) throws IOException {
+	private static byte[] createSheetFromTemplate(String templateFileName, List<Document> documents) throws IOException {
 		byte[] bytes = null;
 		String tempExcelPath = Objects.requireNonNull(App.class.getClassLoader().getResource("")).getPath() + "temp.xlsx";
 		try (XSSFWorkbook workbook = new XSSFWorkbook(templateFileName);
@@ -83,14 +85,14 @@ public class App {
 		try (XSSFWorkbook workbook = new XSSFWorkbook(tempExcelPath);
 		     ByteArrayOutputStream outputStream = new ByteArrayOutputStream();) {
 			//设置模板的第一个sheet的名称
-			workbook.setSheetName(0, "sheet1");
-			for (int i = 1; i < size; i++) {
+			workbook.setSheetName(0, documents.get(0).getName());
+			for (int i = 1; i < documents.size(); i++) {
 				//复制模板，得到第i个sheet
-				workbook.cloneSheet(0, "sheet" + (i + 1));
-				//写到流里
-				workbook.write(outputStream);
-				bytes = outputStream.toByteArray();
+				workbook.cloneSheet(0, documents.get(i).getName());
 			}
+			//写到流里
+			workbook.write(outputStream);
+			bytes = outputStream.toByteArray();
 		} finally {
 			// 最后删除临时文件
 			File file = new File(tempExcelPath);
@@ -106,9 +108,6 @@ public class App {
 		for (JsonNode itemNode : itemNodes) {
 			JsonNode requestNode = itemNode.get("request");
 			String method = requestNode.get("method").asText();
-			if ("GET".equals(method)) {
-				continue;
-			}
 			Document document = new Document();
 			// 获取接口名称
 			document.setName(itemNode.get("name").asText());
@@ -119,17 +118,47 @@ public class App {
 			document.setUrl(urlNode.get("raw").asText());
 			// 获取请求头
 			document.setHeaders(mapper.readerForListOf(Header.class).readValue(requestNode.get("header")));
-			JsonNode bodyNode = requestNode.get("body");
-			String rawStr = bodyNode.get("raw").asText();
-			if ("raw".equals(bodyNode.get("mode").asText())) {
-				document.setRequestExample(rawStr);
-				document.setParameterType(bodyNode.get("mode").asText() + ": " + bodyNode.get("options").get("raw").get("language").asText());
+			if ("POST".equals(method)) {
+				// POST请求解析Body获取请求参数
+				JsonNode bodyNode = requestNode.get("body");
+				String rawStr = bodyNode.get("raw").asText();
+				if ("raw".equals(bodyNode.get("mode").asText())) {
+					document.setRequestExample(rawStr);
+					document.setParameterType(bodyNode.get("mode").asText() + ": " + bodyNode.get("options").get("raw").get("language").asText());
+				}
+				// 获取参数
+				JsonNode rawNodes = mapper.readTree(rawStr);
+				List<Parameter> parameters = new ArrayList<>();
+				convertToParameter(rawNodes, parameters, "0");
+				document.setRequestParameters(parameters);
+			} else if ("GET".equals(method)) {
+				// GET请求解析query获取请求参数
+				List<Parameter> requestParameter = mapper.readerForListOf(Parameter.class).readValue(urlNode.get("query"));
+				Integer index = 1;
+				for (Parameter parameter : requestParameter) {
+					parameter.setIndex(String.valueOf(index));
+					parameter.setType(JsonNodeType.STRING.toString());
+					index++;
+				}
+				document.setRequestParameters(requestParameter);
 			}
-			// 获取参数
-			JsonNode rawNodes = mapper.readTree(rawStr);
-			List<Parameter> parameters = new ArrayList<>();
-			convertToParameter(rawNodes, parameters, "0");
-			document.setRequestParameters(parameters);
+			// 获取响应参数
+			JsonNode responseNodes = itemNode.get("response");
+			for (JsonNode responseNode : responseNodes) {
+				String responseName = responseNode.get("name").asText();
+				String body = responseNode.get("body").asText();
+				if (CollectionUtils.isEmpty(document.getResponseParameters())) {
+					JsonNode bodyNode = mapper.readTree(body);
+					List<Parameter> parameters = new ArrayList<>();
+					convertToParameter(bodyNode, parameters, "0");
+					document.setResponseParameters(parameters);
+				}
+				if ("成功".equals(responseName)) {
+					document.setResponseSuccessExample(body);
+				} else if ("失败".equals(responseName)) {
+					document.setResponseFailExample(body);
+				}
+			}
 			documents.add(document);
 		}
 		return documents;
